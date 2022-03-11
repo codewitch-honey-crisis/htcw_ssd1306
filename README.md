@@ -1,8 +1,8 @@
 # ILI9341
 
-A GFX enabled device driver for the ILI9341
+A GFX enabled device driver for the SSD1306
 
-This library allows GFX to bind to an ILI9341 display so that you can use it as a draw target.
+This library allows GFX to bind to an SSD1306 display so that you can use it as a draw target.
 
 Documentation for GFX is here: https://www.codeproject.com/Articles/5302085/GFX-Forever-The-Complete-Guide-to-GFX-for-IoT
 
@@ -14,11 +14,11 @@ platform = espressif32
 board = node32s
 framework = arduino
 lib_deps = 
-	codewitch-honey-crisis/htcw_ili9341@^1.0.0
+	codewitch-honey-crisis/htcw_ssd1306@^1.0.0
 lib_ldf_mode = deep
 build_unflags=-std=gnu++11
 build_flags=-std=gnu++14
-;            -DESP_WROVER_KIT 
-; define above if you're using the Espressif 
-; ESP-WROVER-Devkit 4.1  
+;            -DI2C 
+; define above if you're using the I2C interface
+; instead of SPI
 ```
