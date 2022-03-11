@@ -1,4 +1,4 @@
-# ILI9341
+# SSD1306
 
 A GFX enabled device driver for the SSD1306
 
