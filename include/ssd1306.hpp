@@ -1,11 +1,12 @@
 #include <tft_driver.hpp>
 #include <gfx_pixel.hpp>
 #include <gfx_positioning.hpp>
-
+#include <gfx_bitmap.hpp>
 namespace arduino {
     template<uint16_t Width,
             uint16_t Height,
             typename Bus,
+            size_t BitDepth = 1,
             uint8_t Address = 0x3C,
             bool Vdc3_3=true,
             uint32_t WriteSpeedPercent=400,
@@ -16,6 +17,8 @@ namespace arduino {
         
         constexpr static const uint16_t width=Width;
         constexpr static const uint16_t height=Height;
+        constexpr static const size_t bit_depth = BitDepth;
+        constexpr static const bool dithered = bit_depth!=1;
         constexpr static const uint8_t address = Address;
         constexpr static const bool vdc_3_3 = Vdc3_3;
         constexpr static const float write_speed_multiplier = (WriteSpeedPercent/100.0);
@@ -24,23 +27,12 @@ namespace arduino {
 private:
         using bus = Bus;
         using driver = tft_driver<PinDC,PinRst,-1,Bus,-1,0x3C,0x00,0x40>;
+        using frame_buffer_type = gfx::large_bitmap<gfx::gsc_pixel<bit_depth>>;
         unsigned int m_initialized;
-        unsigned int m_suspend_x1;
-        unsigned int m_suspend_y1;
-        unsigned int m_suspend_x2;
-        unsigned int m_suspend_y2;
         unsigned int m_suspend_count;
-        unsigned int m_suspend_first;
-    
-        struct rect {
-            unsigned int x1;
-            unsigned int y1;
-            unsigned int x2;
-            unsigned int y2;
-        };
         uint8_t m_contrast;
-        uint8_t m_frame_buffer[width*height/8];
-        
+        frame_buffer_type m_frame_buffer;
+        gfx::rect16 m_suspend_bounds;
         inline void write_bytes(const uint8_t* data,size_t size,bool is_data) {
             if(is_data) {
                 driver::send_data(data,size);
@@ -55,174 +47,79 @@ private:
                 driver::send_command_pgm(data,size);
             }
         }
-        static bool normalize_values(rect& r,bool check_bounds=true) {
-            // normalize values
-            uint16_t tmp;
-            if(r.x1>r.x2) {
-                tmp=r.x1;
-                r.x1=r.x2;
-                r.x2=tmp;
-            }
-            if(r.y1>r.y2) {
-                tmp=r.y1;
-                r.y1=r.y2;
-                r.y2=tmp;
-            }
-            if(check_bounds) {
-                if(r.x1>=width||r.y1>=height)
-                    return false;
-                if(r.x2>=width)
-                    r.x2=width-1;
-                if(r.y2>height)
-                    r.y2=height-1;
-            }
-            return true;
-        }
-        void buffer_fill(const rect& bounds, bool color) {
-            rect r = bounds;
-            if(!normalize_values(r))
+        static void expand_rect(gfx::rect16& dst, const gfx::rect16& src) {
+            if(dst.x1==uint16_t(-1)) {
+                dst=src;
                 return;
-            if(0!=m_suspend_count) {
-                if(0!=m_suspend_first) {
-                    m_suspend_first = 0;
-                    m_suspend_x1 = r.x1;
-                    m_suspend_y1 = r.y1;
-                    m_suspend_x2 = r.x2;
-                    m_suspend_y2 = r.y2;
-                } else {
-                    // if we're suspended update the suspended extents
-                    if(m_suspend_x1>r.x1)
-                        m_suspend_x1=r.x1;
-                    if(m_suspend_y1>r.y1)
-                        m_suspend_y1=r.y1;
-                    if(m_suspend_x2<r.x2)
-                        m_suspend_x2=r.x2;
-                    if(m_suspend_y2<r.y2)
-                        m_suspend_y2=r.y2;
-                }
             }
-            int y=r.y1;
-            int m=y%8;
-            // special case when bottom and top are the same bank:
-            if(r.y1/8==r.y2/8) {
-                const uint8_t on_mask = uint8_t(uint8_t(0xFF<<((r.y1%8))) & uint8_t(0xFF>>(7-(r.y2%8))));
-                const uint8_t set_mask = uint8_t(~on_mask);
-                const uint8_t value_mask = uint8_t(on_mask*color);
-                for(unsigned int x=r.x1;x<=r.x2;++x) {
-                    uint8_t* p = m_frame_buffer+(y/8*width)+x;
-                    *p&=set_mask;
-                    *p|=value_mask;
-                }
-                return;
-            } 
-           
-            // first handle the top
-            {
-                const uint8_t on_mask = uint8_t(uint8_t(0xFF<<((r.y1%8))));
-                const uint8_t set_mask = uint8_t(~on_mask);
-                const uint8_t value_mask = uint8_t(on_mask*color);
-                for(unsigned int x=r.x1;x<=r.x2;++x) {
-                    uint8_t* p = m_frame_buffer+(y/8*width)+x;
-                    *p&=set_mask;
-                    *p|=value_mask;
-                }
-                
-                y=r.y1+(8-m);
+            if(src.x1<dst.x1) {
+                dst.x1 = src.x1;
             }
-            
-            unsigned int be = r.y2/8;
-            unsigned int b = y/8;
-            
-            while(b<be) {
-                // we can do a faster fill for this part
-                const int w = r.x2-r.x1+1;    
-                uint8_t* p = m_frame_buffer+(b*width)+r.x1;
-                memset(p,0xFF*color,w);
-                ++b;
+            if(src.y1<dst.y1) {
+                dst.y1 = src.y1;
             }
-            // now do the trailing rows
-            if(b*8<r.y2) {
-                m=r.y2%8;
-                y=r.y2;
-                const uint8_t on_mask = uint8_t(0xFF>>(7-(r.y2%8)));
-                const uint8_t set_mask = uint8_t(~on_mask);
-                const uint8_t value_mask = uint8_t(on_mask*color);
-                uint8_t* p = m_frame_buffer+(y/8*width)+r.x1;
-                for(unsigned int x=r.x1;x<=r.x2;++x) {
-                    *p&=set_mask;
-                    *p|=value_mask;
-                    ++p;
-                }
+            if(src.x2>dst.x2) {
+                dst.x2 = src.x2;
+            }
+            if(src.y2>dst.y2) {
+                dst.y2 = src.y2;
             }
         }
-        void display_update(const rect& bounds) {
-            rect b = bounds;
-            if(!normalize_values(b))
-                return;
-            initialize();
-            // don't draw if we're suspended
-            if(0==m_suspend_count) {    
-                uint8_t dlist1[] = {
+
+        void update_display() {
+            gfx::rect16 rr = m_suspend_bounds;
+            pixel_type px;
+            /*if(dithered) {
+                rr=rr.inflate(8,8).crop(this->bounds());
+            }*/
+            rr.y1&=0xF8;
+            rr.y2|=0x07;
+            uint8_t dlist1[] = {
                     0x22,
-                    uint8_t(b.y1/8),                   // Page start address
+                    uint8_t(rr.y1/8),                   // Page start address
                     uint8_t(0xFF),                   // Page end (not really, but works here)
-                    0x21, uint8_t(b.x1)};// Column start address
-                write_bytes(dlist1, sizeof(dlist1),false);
-                uint8_t cmd = b.x2;
-                write_bytes(&cmd,1,false); // Column end address
-                if(b.x1==0&&b.y1==0&&b.x2==width-1&&b.y2==height-1) {
-                    // special case for whole screen
-                    return write_bytes(m_frame_buffer,width*height/8,true);
+                    0x21, uint8_t(rr.x1)};// Column start address
+            write_bytes(dlist1, sizeof(dlist1),false);
+            uint8_t col = rr.x2;
+            write_bytes(&col,1,false); // Column end address
+            if(!dithered) {
+                for(int y = rr.y1;y<=rr.y2;y+=8) {
+                    for(int x = rr.x1;x<=rr.x2;++x) {
+                        uint8_t b = 0;
+                        for(int yy = 0;yy<8;++yy) {
+                            m_frame_buffer.point({uint16_t(x),uint16_t(yy+y)},&px);
+                            if(px.native_value) {
+                                b|=(1<<(yy));
+                            }
+                        }
+                        write_bytes(&b,1,true);
+                    }
                 }
-                const int be = (b.y2+8)/8;
-                const int w = b.x2-b.x1+1;
-                for(int bb=b.y1/8;bb<be;++bb) {
-                    uint8_t* p = m_frame_buffer+(bb*width)+b.x1;
-                    write_bytes(p,w,true);
+            } else {
+                for(int y = rr.y1;y<=rr.y2;y+=8) {
+                    for(int x = rr.x1;x<=rr.x2;++x) {
+                        int col = x&15;
+                        uint8_t b = 0;
+                        for(int yy = 0;yy<8;++yy) {
+                            int yyy = yy+y;
+                            int row=yyy&15;
+                            m_frame_buffer.point({uint16_t(x),uint16_t(yyy)},&px);
+                            
+                            b|=(1<<(yy))*(255.0*px.template channelr<gfx::channel_name::L>()>gfx::helpers::dither::bayer_16[col+row*16]);
+                            
+                            
+                        }
+                        write_bytes(&b,1,true);
+                    }
                 }
             }
         }
-        bool pixel_read(uint16_t x,uint16_t y,bool* out_color) const {
-            if(nullptr==out_color)
-                return false;
-            if(x>=width || y>=height) {
-                *out_color = false;
-                return true;
-            }
-            const uint8_t* p = m_frame_buffer+(y/8*width)+x;
-            *out_color = 0!=(*p & (1<<(y&7)));
-            return true;
-        }
-        bool frame_fill(const rect& bounds,bool color) {
-            if(!initialize()) {
-                return false;
-            }
-            buffer_fill(bounds,color);
-            display_update(bounds);
-            return true;
-        }
-        bool frame_suspend() {
-            m_suspend_first=(m_suspend_count==0);
-            ++m_suspend_count;
-            return true;
-        }
-        bool frame_resume(bool force=false) {
-            if(0!=m_suspend_count) {
-                --m_suspend_count;
-                if(force)
-                    m_suspend_count = 0;
-                if(0==m_suspend_count) {
-                    display_update({m_suspend_x1,m_suspend_y1,m_suspend_x2,m_suspend_y2});
-                }
-                
-            } 
-            return true;
-        }
+
 public:
-        ssd1306() : 
+        ssd1306(void*(allocator)(size_t)=::malloc,void(deallocator)(void*)=::free) : 
                     m_initialized(false),
                     m_suspend_count(0),
-                    m_suspend_first(0) {
+                    m_frame_buffer(dimensions(),1,nullptr,allocator,deallocator) {
             
         }
         inline bool initialized() const {
@@ -237,10 +134,13 @@ public:
                 digitalWrite(pin_rst,HIGH);
             }
         }
-        bool initialize() {
+        gfx::gfx_result initialize() {
             if(!m_initialized) {
+                if(!m_frame_buffer.initialized()) {
+                    return gfx::gfx_result::out_of_memory;
+                }
                 if(!driver::initialize()) {
-                    return false;
+                    return gfx::gfx_result::device_error;
                 }
                 bus::set_speed_multiplier(write_speed_multiplier);
                 if(reset_before_init) {
@@ -285,7 +185,7 @@ public:
                     com_pins = 0x2; // ada x12
                     m_contrast = !vdc_3_3 ? 0x10:0xAF;
                 } else
-                    return false;
+                    return gfx::gfx_result::invalid_argument;
                 cmd=0xDA;
                 write_bytes(&cmd,1,false);
                 write_bytes(&com_pins,1,false);
@@ -306,41 +206,55 @@ public:
                 write_pgm_bytes(init5, sizeof(init5),false);
                 bus::end_write();
                 bus::end_initialization();
+                m_suspend_bounds = {uint16_t(-1),uint16_t(-1),uint16_t(-1),uint16_t(-1)};
+                m_suspend_count = 0;
                 m_initialized = true;
             }
-            return true;
+            return gfx::gfx_result::success;
         }
-        const uint8_t* frame_buffer() const {
-            return m_frame_buffer;
-        }
-        
         
         // GFX Bindings
         using type = ssd1306;
-        using pixel_type = gfx::gsc_pixel<1>;
+        using pixel_type = gfx::gsc_pixel<bit_depth>;
         using caps = gfx::gfx_caps<false,false,false,false,true,true,false>;
         constexpr inline gfx::size16 dimensions() const {return gfx::size16(width,height);}
         constexpr inline gfx::rect16 bounds() const { return dimensions().bounds(); }
         // gets a point 
         gfx::gfx_result point(gfx::point16 location,pixel_type* out_color) const {
-            bool col=false;
-            if(!pixel_read(location.x,location.y,&col)) {
-                return gfx::gfx_result::io_error;
+            if(!m_initialized) {
+                return gfx::gfx_result::invalid_state;
             }
-            pixel_type p(!!col);
-            *out_color=p;
-            return gfx::gfx_result::success;
+            return m_frame_buffer.point(location,out_color);
        }
         // sets a point to the specified pixel
         inline gfx::gfx_result point(gfx::point16 location,pixel_type color) {
-            if(!frame_fill({location.x,location.y,location.x,location.y},color.native_value!=0)) {
-                return gfx::gfx_result::io_error;
+            gfx::gfx_result r = initialize();
+            if(r!=gfx::gfx_result::success) {
+                return r;
             }
-            return gfx::gfx_result::success;
+            if(!bounds().intersects(location)) {
+                return gfx::gfx_result::success;
+            }
+            expand_rect(m_suspend_bounds,{location.x,location.y,location.x,location.y});
+            m_frame_buffer.point(location,color);
+            if(m_suspend_count==0) {
+                update_display();
+            }
+            return gfx::gfx_result::success;    
         }
-        inline gfx::gfx_result fill(const gfx::rect16& rect,pixel_type color) {
-            if(!frame_fill({rect.x1,rect.y1,rect.x2,rect.y2},color.native_value!=0)) {
-                return gfx::gfx_result::io_error;
+        inline gfx::gfx_result fill(const gfx::rect16& bounds,pixel_type color) {
+            gfx::gfx_result r = initialize();
+            if(r!=gfx::gfx_result::success) {
+                return r;
+            }
+            gfx::rect16 rect = bounds.crop(this->bounds()).normalize();
+            if(!this->bounds().intersects(rect)) {
+                return gfx::gfx_result::success;
+            }
+            expand_rect(m_suspend_bounds,rect);
+            m_frame_buffer.fill(rect,color);
+            if(m_suspend_count==0) {
+                update_display();
             }
             return gfx::gfx_result::success;
         }
@@ -351,15 +265,17 @@ public:
             return fill(rect,p);
         }
         inline gfx::gfx_result suspend() {
-            if(!frame_suspend()) {
-                return gfx::gfx_result::io_error;
-            }
+            ++m_suspend_count;
             return gfx::gfx_result::success;
         }
-        inline gfx::gfx_result resume(bool force=false) {
-            if(!frame_resume(force)) {
-                return gfx::gfx_result::io_error;
+        gfx::gfx_result resume(bool force=false) {
+            if(m_suspend_count<2 || force) {
+                m_suspend_count = 0;
+                update_display();
+                m_suspend_bounds.x1=-1;
+                return gfx::gfx_result::success;
             }
+            --m_suspend_count;
             return gfx::gfx_result::success;
         }
     };

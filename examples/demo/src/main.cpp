@@ -56,7 +56,7 @@ build_flags=-std=gnu++14
 
 // Undefine this to see
 // the difference
-#define SUSPEND_RESUME
+//#define SUSPEND_RESUME
 
 #include <Arduino.h>
 #include <stdio.h>
@@ -64,7 +64,7 @@ build_flags=-std=gnu++14
 #include <ssd1306.hpp>
 #include <gfx_cpp14.hpp>
 #include "Bm437_Acer_VGA_8x8.h"
-
+#include "image3.h"
 using namespace arduino;
 using namespace gfx;
 
@@ -79,7 +79,7 @@ using bus_type = tft_spi_ex<LCD_HOST,PIN_NUM_CS,PIN_NUM_MOSI,PIN_NUM_MISO,PIN_NU
 >;
 #endif
 
-using lcd_type = ssd1306<LCD_WIDTH,LCD_HEIGHT,bus_type,LCD_ADDRESS,LCD_VDC_3_3,LCD_WRITE_SPEED_PERCENT,PIN_NUM_DC,PIN_NUM_RST,true>;
+using lcd_type = ssd1306<LCD_WIDTH,LCD_HEIGHT,bus_type,4,LCD_ADDRESS,LCD_VDC_3_3,LCD_WRITE_SPEED_PERCENT,PIN_NUM_DC,PIN_NUM_RST,true>;
 lcd_type lcd;
 
 using lcd_color = color<typename lcd_type::pixel_type>;
@@ -217,10 +217,10 @@ void lines_demo() {
                 lcd_type::width-i*(lcd_type::width/100.0)-1,
                 lcd_type::height-i*(lcd_type::height/100.0)-1);
 
-        draw::line(lcd,srect16(0,r.y1,r.x1,lcd_type::height-1),lcd_color::white);
-        draw::line(lcd,srect16(r.x2,0,lcd_type::width-1,r.y2),lcd_color::white);
-        draw::line(lcd,srect16(0,r.y2,r.x1,0),lcd_color::white);
-        draw::line(lcd,srect16(lcd_type::width-1,r.y1,r.x2,lcd_type::height-1),lcd_color::white);
+        draw::line(lcd,srect16(0,r.y1,r.x1,lcd_type::height-1),lcd_color::red);
+        draw::line(lcd,srect16(r.x2,0,lcd_type::width-1,r.y2),lcd_color::blue);
+        draw::line(lcd,srect16(0,r.y2,r.x1,0),lcd_color::orange);
+        draw::line(lcd,srect16(lcd_type::width-1,r.y1,r.x2,lcd_type::height-1),lcd_color::green);
 #ifdef SUSPEND_RESUME
         draw::resume(lcd);
 #endif
@@ -271,10 +271,17 @@ void intro() {
 }
 void setup() {
     Serial.begin(115200);
+    /*gfx_result r = lcd.initialize();
+    if(r!=gfx_result::success) {
+        Serial.printf("Error initializing display: %d\r\n",(int)r);
+    }*/
     intro();
 }
 void loop() {
     lines_demo();
     scroll_text_demo();
     bmp_demo();
+    image3_jpg_stream.seek(0);
+    draw::image(lcd,srect16(0,0,335,255).center((srect16)lcd.bounds()),&image3_jpg_stream);
+    delay(2000);
 }
