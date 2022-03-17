@@ -284,4 +284,5 @@ void loop() {
     image3_jpg_stream.seek(0);
     draw::image(lcd,srect16(0,0,335,255).center((srect16)lcd.bounds()),&image3_jpg_stream);
     delay(2000);
+    lcd.dithering(!lcd.dithering());
 }
