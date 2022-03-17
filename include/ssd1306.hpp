@@ -33,6 +33,7 @@ private:
         uint8_t m_contrast;
         frame_buffer_type m_frame_buffer;
         gfx::rect16 m_suspend_bounds;
+        bool m_dithering;
         inline void write_bytes(const uint8_t* data,size_t size,bool is_data) {
             if(is_data) {
                 driver::send_data(data,size);
@@ -69,9 +70,6 @@ private:
         void update_display() {
             gfx::rect16 rr = m_suspend_bounds;
             pixel_type px;
-            /*if(dithered) {
-                rr=rr.inflate(8,8).crop(this->bounds());
-            }*/
             rr.y1&=0xF8;
             rr.y2|=0x07;
             uint8_t dlist1[] = {
@@ -96,21 +94,38 @@ private:
                     }
                 }
             } else {
-                for(int y = rr.y1;y<=rr.y2;y+=8) {
-                    for(int x = rr.x1;x<=rr.x2;++x) {
-                        int col = x&15;
-                        uint8_t b = 0;
-                        for(int yy = 0;yy<8;++yy) {
-                            int yyy = yy+y;
-                            int row=yyy&15;
-                            m_frame_buffer.point({uint16_t(x),uint16_t(yyy)},&px);
-                            
-                            b|=(1<<(yy))*(255.0*px.template channelr<gfx::channel_name::L>()>gfx::helpers::dither::bayer_16[col+row*16]);
-                            
-                            
+                if(m_dithering) {
+                    for(int y = rr.y1;y<=rr.y2;y+=8) {
+                        for(int x = rr.x1;x<=rr.x2;++x) {
+                            int col = x&15;
+                            uint8_t b = 0;
+                            for(int yy = 0;yy<8;++yy) {
+                                int yyy = yy+y;
+                                int row=yyy&15;
+                                m_frame_buffer.point({uint16_t(x),uint16_t(yyy)},&px);
+                                
+                                b|=(1<<(yy))*(255.0*px.template channelr<gfx::channel_name::L>()>gfx::helpers::dither::bayer_16[col+row*16]);
+                                
+                                
+                            }
+                            write_bytes(&b,1,true);
                         }
-                        write_bytes(&b,1,true);
                     }
+                } else {
+                    for(int y = rr.y1;y<=rr.y2;y+=8) {
+                        for(int x = rr.x1;x<=rr.x2;++x) {
+                            uint8_t b = 0;
+                            for(int yy = 0;yy<8;++yy) {
+                                m_frame_buffer.point({uint16_t(x),uint16_t(yy+y)},&px);
+                                gfx::gsc_pixel<1> npx;
+                                gfx::convert(px,&npx);
+                                if(npx.native_value) {
+                                    b|=(1<<(yy));
+                                }
+                            }
+                            write_bytes(&b,1,true);
+                        }
+                    }   
                 }
             }
         }
@@ -119,7 +134,8 @@ public:
         ssd1306(void*(allocator)(size_t)=::malloc,void(deallocator)(void*)=::free) : 
                     m_initialized(false),
                     m_suspend_count(0),
-                    m_frame_buffer(dimensions(),1,nullptr,allocator,deallocator) {
+                    m_frame_buffer(dimensions(),1,nullptr,allocator,deallocator),
+                    m_dithering(dithered) {
             
         }
         inline bool initialized() const {
@@ -212,7 +228,12 @@ public:
             }
             return gfx::gfx_result::success;
         }
-        
+        inline bool dithering() const {
+            return m_dithering && dithered;
+        }
+        inline void dithering(bool value) {
+            m_dithering = value;
+        }
         // GFX Bindings
         using type = ssd1306;
         using pixel_type = gfx::gsc_pixel<bit_depth>;
