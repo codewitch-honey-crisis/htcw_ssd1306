@@ -1,17 +1,3 @@
-/* Your platformio.ini file should look something like this
-
-[env:node32s]
-platform = espressif32
-board = node32s
-framework = arduino
-lib_deps = 
-	codewitch-honey-crisis/htcw_ssd1306@^1.0.0
-lib_ldf_mode = deep
-build_unflags=-std=gnu++11
-build_flags=-std=gnu++14
-;            -DI2C ; define if you're using the I2C interface. Otherwise SPI is used
-*/
-
 // ensure the following is configured for your setup
 #ifdef I2C
 #define LCD_PORT 0
