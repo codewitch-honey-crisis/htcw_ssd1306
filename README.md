@@ -14,7 +14,7 @@ platform = espressif32
 board = node32s
 framework = arduino
 lib_deps = 
-	codewitch-honey-crisis/htcw_ssd1306@^1.1.6
+	codewitch-honey-crisis/htcw_ssd1306@^1.1.7
 lib_ldf_mode = deep
 build_unflags=-std=gnu++11
 build_flags=-std=gnu++14
