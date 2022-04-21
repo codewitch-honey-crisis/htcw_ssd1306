@@ -19,7 +19,8 @@
 #define LCD_WRITE_SPEED_PERCENT 200
 #endif
 
-
+#define LCD_ROTATION 0
+#define LCD_BIT_DEPTH 4
 #define LCD_WIDTH 128
 #define LCD_HEIGHT 64
 
@@ -65,7 +66,7 @@ using bus_type = tft_spi_ex<LCD_HOST,PIN_NUM_CS,PIN_NUM_MOSI,PIN_NUM_MISO,PIN_NU
 >;
 #endif
 
-using lcd_type = ssd1306<LCD_WIDTH,LCD_HEIGHT,bus_type,4,LCD_ADDRESS,LCD_VDC_3_3,LCD_WRITE_SPEED_PERCENT,PIN_NUM_DC,PIN_NUM_RST,true>;
+using lcd_type = ssd1306<LCD_WIDTH,LCD_HEIGHT,bus_type,LCD_ROTATION,LCD_BIT_DEPTH,LCD_ADDRESS,LCD_VDC_3_3,LCD_WRITE_SPEED_PERCENT,PIN_NUM_DC,PIN_NUM_RST,true>;
 lcd_type lcd;
 
 using lcd_color = color<typename lcd_type::pixel_type>;

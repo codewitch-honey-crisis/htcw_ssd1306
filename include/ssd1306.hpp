@@ -6,6 +6,7 @@ namespace arduino {
     template<uint16_t Width,
             uint16_t Height,
             typename Bus,
+            uint8_t Rotation = 0,
             size_t BitDepth = 1,
             uint8_t Address = 0x3C,
             bool Vdc3_3=true,
@@ -15,8 +16,7 @@ namespace arduino {
             bool ResetBeforeInit=false>
     struct ssd1306 final {
         
-        constexpr static const uint16_t width=Width;
-        constexpr static const uint16_t height=Height;
+        constexpr static const uint8_t rotation = Rotation &3;
         constexpr static const size_t bit_depth = BitDepth;
         constexpr static const bool dithered = bit_depth!=1;
         constexpr static const uint8_t address = Address;
@@ -25,6 +25,9 @@ namespace arduino {
         constexpr static const int8_t pin_rst = PinRst;
         constexpr static const bool reset_before_init = ResetBeforeInit;
 private:
+        constexpr static const uint16_t width=Width;
+        constexpr static const uint16_t height=Height;
+        
         using bus = Bus;
         using driver = tft_driver<PinDC,PinRst,-1,Bus,-1,0x3C,0x00,0x40>;
         using frame_buffer_type = gfx::large_bitmap<gfx::gsc_pixel<bit_depth>>;
@@ -49,7 +52,7 @@ private:
             }
         }
         static void expand_rect(gfx::rect16& dst, const gfx::rect16& src) {
-            if(dst.x1==uint16_t(-1)) {
+            if(dst.x1==uint16_t(-1) || dst.y1==uint16_t(-1) || dst.x2==uint16_t(-1) || dst.y2==uint16_t(-1)) {
                 dst=src;
                 return;
             }
@@ -68,8 +71,18 @@ private:
         }
 
         void update_display() {
+            if(m_suspend_count) {
+                return;
+            }
+            
             gfx::rect16 rr = m_suspend_bounds;
-            pixel_type px;
+            m_suspend_bounds = gfx::rect16(-1,-1,-1,-1);
+            translate(rr);
+            if(!rr.intersects(gfx::rect16(0,0,width-1,height-1))) {
+                return;
+            }
+            //print_source(m_frame_buffer);
+            pixel_type cpx;
             rr.y1&=0xF8;
             rr.y2|=0x07;
             uint8_t dlist1[] = {
@@ -80,13 +93,16 @@ private:
             write_bytes(dlist1, sizeof(dlist1),false);
             uint8_t col = rr.x2;
             write_bytes(&col,1,false); // Column end address
-            if(!dithered) {
+            
+            if(!dithered) {   
                 for(int y = rr.y1;y<=rr.y2;y+=8) {
                     for(int x = rr.x1;x<=rr.x2;++x) {
                         uint8_t b = 0;
                         for(int yy = 0;yy<8;++yy) {
-                            m_frame_buffer.point({uint16_t(x),uint16_t(yy+y)},&px);
-                            if(px.native_value) {
+                            uint16_t tmp_x=x,tmp_y=yy+y;
+                            translate(tmp_x,tmp_y);
+                            m_frame_buffer.point({tmp_x,tmp_y},&cpx);
+                            if(cpx.native_value) {
                                 b|=(1<<(yy));
                             }
                         }
@@ -102,9 +118,11 @@ private:
                             for(int yy = 0;yy<8;++yy) {
                                 int yyy = yy+y;
                                 int row=yyy&15;
-                                m_frame_buffer.point({uint16_t(x),uint16_t(yyy)},&px);
+                                uint16_t tmp_x=x,tmp_y=yyy;
+                                translate(tmp_x,tmp_y);
+                                m_frame_buffer.point({tmp_x,tmp_y},&cpx);
                                 
-                                b|=(1<<(yy))*(255.0*px.template channelr<gfx::channel_name::L>()>gfx::helpers::dither::bayer_16[col+row*16]);
+                                b|=(1<<(yy))*(255.0*cpx.template channelr<gfx::channel_name::L>()>gfx::helpers::dither::bayer_16[col+row*16]);
                                 
                                 
                             }
@@ -116,9 +134,11 @@ private:
                         for(int x = rr.x1;x<=rr.x2;++x) {
                             uint8_t b = 0;
                             for(int yy = 0;yy<8;++yy) {
-                                m_frame_buffer.point({uint16_t(x),uint16_t(yy+y)},&px);
+                                uint16_t tmp_x=x,tmp_y=yy+y;
+                                translate(tmp_x,tmp_y);
+                                m_frame_buffer.point({tmp_x,tmp_y},&cpx);
                                 gfx::gsc_pixel<1> npx;
-                                gfx::convert(px,&npx);
+                                gfx::convert(cpx,&npx);
                                 if(npx.native_value) {
                                     b|=(1<<(yy));
                                 }
@@ -129,12 +149,29 @@ private:
                 }
             }
         }
-
+        
+        inline static void translate(uint16_t& x,uint16_t& y,bool flip=true) {
+            uint16_t tmp;
+            if(rotation&1) {
+                tmp=y;
+                y=x;
+                x=tmp;                 
+            };
+        }
+        inline static void translate(gfx::point16& point) {
+            translate(point.x,point.y);
+        }
+        inline static void translate(gfx::rect16& rect) {
+            translate(rect.x1,rect.y1,false);
+            translate(rect.x2,rect.y2,false);
+            //rect.normalize_inplace();
+        }
 public:
         ssd1306(void*(allocator)(size_t)=::malloc,void(deallocator)(void*)=::free) : 
                     m_initialized(false),
                     m_suspend_count(0),
                     m_frame_buffer(dimensions(),1,nullptr,allocator,deallocator),
+                    m_suspend_bounds(-1,-1,-1,-1),
                     m_dithering(dithered) {
             
         }
@@ -238,12 +275,20 @@ public:
         using type = ssd1306;
         using pixel_type = gfx::gsc_pixel<bit_depth>;
         using caps = gfx::gfx_caps<false,false,false,false,true,true,false>;
-        constexpr inline gfx::size16 dimensions() const {return gfx::size16(width,height);}
+        constexpr inline gfx::size16 dimensions() const {return rotation&1?gfx::size16(height,width):gfx::size16(width,height);}
         constexpr inline gfx::rect16 bounds() const { return dimensions().bounds(); }
         // gets a point 
         gfx::gfx_result point(gfx::point16 location,pixel_type* out_color) const {
             if(!m_initialized) {
                 return gfx::gfx_result::invalid_state;
+            }
+            if(rotation==1) {
+                location.x = m_frame_buffer.dimensions().width-1-location.x;
+            } else if(rotation==2) {
+                location.x = m_frame_buffer.dimensions().width-1-location.x;
+                location.y = m_frame_buffer.dimensions().height-1-location.y;
+            } else if(rotation==3) {
+                location.y = m_frame_buffer.dimensions().height-1-location.y;
             }
             return m_frame_buffer.point(location,out_color);
        }
@@ -256,11 +301,17 @@ public:
             if(!bounds().intersects(location)) {
                 return gfx::gfx_result::success;
             }
+            if(rotation==1) {
+                location.x = m_frame_buffer.dimensions().width-1-location.x;
+            } else if(rotation==2) {
+                location.x = m_frame_buffer.dimensions().width-1-location.x;
+                location.y = m_frame_buffer.dimensions().height-1-location.y;
+            } else if(rotation==3) {
+                location.y = m_frame_buffer.dimensions().height-1-location.y;
+            }
             expand_rect(m_suspend_bounds,{location.x,location.y,location.x,location.y});
             m_frame_buffer.point(location,color);
-            if(m_suspend_count==0) {
-                update_display();
-            }
+            update_display();
             return gfx::gfx_result::success;    
         }
         inline gfx::gfx_result fill(const gfx::rect16& bounds,pixel_type color) {
@@ -272,11 +323,24 @@ public:
             if(!this->bounds().intersects(rect)) {
                 return gfx::gfx_result::success;
             }
+            if(rotation==1) {
+                rect.x1 = m_frame_buffer.dimensions().width-1-rect.x1;
+                rect.x2 = m_frame_buffer.dimensions().width-1-rect.x2;
+                rect.normalize_inplace();
+            } else if(rotation==2) {
+                rect.x1 = m_frame_buffer.dimensions().width-1-rect.x1;
+                rect.x2 = m_frame_buffer.dimensions().width-1-rect.x2;
+                rect.y1 = m_frame_buffer.dimensions().height-1-rect.y1;
+                rect.y2 = m_frame_buffer.dimensions().height-1-rect.y2;
+                rect.normalize_inplace();
+            } else if(rotation==3) {
+                rect.y1 = m_frame_buffer.dimensions().height-1-rect.y1;
+                rect.y2 = m_frame_buffer.dimensions().height-1-rect.y2;
+                rect.normalize_inplace();
+            }
             expand_rect(m_suspend_bounds,rect);
             m_frame_buffer.fill(rect,color);
-            if(m_suspend_count==0) {
-                update_display();
-            }
+            update_display();
             return gfx::gfx_result::success;
         }
         
@@ -293,7 +357,6 @@ public:
             if(m_suspend_count<2 || force) {
                 m_suspend_count = 0;
                 update_display();
-                m_suspend_bounds.x1=-1;
                 return gfx::gfx_result::success;
             }
             --m_suspend_count;
