@@ -29,7 +29,7 @@ private:
         constexpr static const uint16_t height=Height;
         
         using bus = Bus;
-        using driver = tft_driver<PinDC,PinRst,-1,Bus,-1,0x3C,0x00,0x40>;
+        using driver = tft_driver<PinDC,PinRst,-1,Bus,-1,address,0x00,0x40>;
         using frame_buffer_type = gfx::large_bitmap<gfx::gsc_pixel<bit_depth>>;
         unsigned int m_initialized;
         unsigned int m_suspend_count;
